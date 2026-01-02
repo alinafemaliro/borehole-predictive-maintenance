@@ -2,13 +2,11 @@
 model_comparison:
   # Models to compare
   models_to_compare:
-    - xgboost
+  
     - random_forest
     - logistic_regression
     - gradient_boosting
-    - lightgbm
-    - lstm
-    - prophet
+
   
   # Prediction horizons to evaluate
   prediction_horizons: [7, 14, 30]
