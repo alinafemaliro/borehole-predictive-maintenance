@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (keep README.md only)
+data/raw/
+data/processed/
+data/external/
+!data/**/README.md
+
+# Models/artifacts (usually too big)
+models/trained_models/
+models/model_artifacts/
+
+# Logs
+*.log
