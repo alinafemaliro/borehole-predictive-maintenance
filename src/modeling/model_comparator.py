@@ -305,14 +305,16 @@ class ModelComparator:
         y_test: np.ndarray,
         feature_names: Optional[List[str]] = None,
     ) -> Dict:
-        # predictions
+        """Evaluate model performance safely (handles single-class test sets)."""
+
+        # --- Get predictions ---
         if model_name == "lstm":
             seq_len = self.config["models"]["lstm"]["sequence_length"]
             X_seq = self._reshape_for_lstm(X_test, seq_len)
             y_proba = model.predict(X_seq, verbose=0).flatten()
             y_true = y_test[seq_len - 1 :]
         elif model_name == "prophet":
-            # placeholder (until Prophet is wired to ds/y)
+            # Placeholder until Prophet is wired to ds/y
             y_proba = np.random.random(len(y_test))
             y_true = y_test
         else:
@@ -324,24 +326,35 @@ class ModelComparator:
 
         metrics: Dict[str, Any] = {}
 
-        # Recall@K%
+        # --- Recall@K% ---
         metrics["recall_at_k"] = {}
         for k in self.model_config["evaluation_metrics"]["k_values"]:
-            metrics["recall_at_k"][f"recall@{k}%"] = calculate_recall_at_k(y_true, y_proba, k)
+            metrics["recall_at_k"][f"recall@{k}%"] = float(calculate_recall_at_k(y_true, y_proba, k))
 
-        # PR-AUC
-        precision, recall, _ = precision_recall_curve(y_true, y_proba)
-        metrics["pr_auc"] = float(auc(recall, precision))
+        # --- PR-AUC (safe if no positives) ---
+        if int(y_true.sum()) == 0:
+            metrics["pr_auc"] = float("nan")
+        else:
+            precision, recall, _ = precision_recall_curve(y_true, y_proba)
+            metrics["pr_auc"] = float(auc(recall, precision))
 
-        # F2
+        # --- F2 score (safe even if single-class; will be 0 in many cases) ---
         metrics["f2_score"] = float(fbeta_score(y_true, y_pred, beta=2))
 
-        # Secondary metrics
-        metrics["roc_auc"] = float(roc_auc_score(y_true, y_proba))
+        # --- ROC-AUC (safe if single-class) ---
+        if len(np.unique(y_true)) < 2:
+            metrics["roc_auc"] = float("nan")
+        else:
+            metrics["roc_auc"] = float(roc_auc_score(y_true, y_proba))
+
+        # --- Brier score + MCC ---
         metrics["brier_score"] = float(brier_score_loss(y_true, y_proba))
         metrics["matthews_corrcoef"] = float(matthews_corrcoef(y_true, y_pred))
 
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        # --- Confusion matrix (force 2x2 always) ---
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        tn, fp, fn, tp = cm.ravel()
+
         metrics["confusion_matrix"] = {
             "true_negative": int(tn),
             "false_positive": int(fp),
@@ -349,16 +362,22 @@ class ModelComparator:
             "true_positive": int(tp),
         }
 
+        # Derived metrics
         metrics["precision"] = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
         metrics["recall"] = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
         metrics["specificity"] = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
 
+        # --- Feature importance (if available) ---
         if feature_names is not None and hasattr(model, "feature_importances_"):
             importances = model.feature_importances_
             metrics["feature_importance"] = dict(zip(feature_names, importances))
 
+        # --- Model complexity ---
         metrics["model_complexity"] = self._calculate_model_complexity(model, model_name)
+
         return metrics
+
+        
 
     def _calculate_model_complexity(self, model: Any, model_name: str) -> Dict:
         complexity: Dict[str, Any] = {}

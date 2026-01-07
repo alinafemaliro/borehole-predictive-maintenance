@@ -38,6 +38,43 @@ def make_horizon_labels(df: pd.DataFrame, group_col: str, date_col: str, event_c
 
     return pd.Series(y, index=df.index).sort_index()
 
+def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.sort_values(["monitor_num", "Date"]).copy()
+
+    # Basic time parts
+    df["dayofweek"] = df["Date"].dt.dayofweek
+    df["month"] = df["Date"].dt.month
+
+    # Choose main signal
+    col = "litres/day_interpolated"
+
+    # Lags
+    for lag in [1, 2, 7, 14]:
+        df[f"{col}_lag_{lag}"] = df.groupby("monitor_num")[col].shift(lag)
+
+    # Rolling windows (use past values only)
+    for w in [7, 14, 30]:
+        g = df.groupby("monitor_num")[col]
+        df[f"{col}_roll_mean_{w}"] = g.shift(1).rolling(w).mean()
+        df[f"{col}_roll_std_{w}"] = g.shift(1).rolling(w).std()
+
+    # Trend (difference between recent mean and older mean)
+    df[f"{col}_trend_7_14"] = df[f"{col}_roll_mean_7"] - df[f"{col}_roll_mean_14"]
+
+    # Days since last maintenance
+    df["days_since_maintenance"] = (
+        df.groupby("monitor_num")["maintenance"]
+          .apply(lambda s: (s.shift(1).fillna(0).eq(1)).cumsum())
+          .reset_index(level=0, drop=True)
+    )
+    # The above gives "event block id". Convert to days since last event:
+    last_event_date = df["Date"].where(df["maintenance"].shift(1) == 1)
+    last_event_date = last_event_date.groupby(df["monitor_num"]).ffill()
+    df["days_since_maintenance"] = (df["Date"] - last_event_date).dt.days
+    df["days_since_maintenance"] = df["days_since_maintenance"].fillna(9999)
+
+    return df
+
 
 def main():
     # --- Load config ---
@@ -56,6 +93,8 @@ def main():
     # --- Basic cleanup ---
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values(["monitor_num", "Date"]).reset_index(drop=True)
+    
+    df = add_time_features(df)
 
     # Drop useless column if present
     if "Unnamed: 0" in df.columns:
@@ -65,30 +104,23 @@ def main():
     if "z_score" in df.columns and df["z_score"].isna().all():
         df = df.drop(columns=["z_score"])
 
-    # --- Feature selection (start simple and stable) ---
-    # Use the “interpolated” litres/day plus weather + usage + location + population
-    candidate_features = [
-        "litres/day_interpolated",
-        "Rainfall",
-        "min_temp",
-        "max_temp",
-        "time_in_use",
-        "wet_time",
-        "dry_time_in_use",
-        "dry_time_in_use_percentage",
-        "longest_dry_time_in_use",
-        "Population",
-        "Latitude",
-        "Longitude",
+  
+    # Use all numeric columns except identifiers, date, and target
+    exclude = {"Unnamed: 0", "Date", "monitor_num", "maintenance"}
+    features = [
+        c for c in df.columns
+        if c not in exclude and pd.api.types.is_numeric_dtype(df[c])
     ]
-    features = [c for c in candidate_features if c in df.columns]
 
-    # Fill missing numeric values with median (simple baseline)
+    # Fill missing numeric values with median
     for c in features:
         if df[c].isna().any():
             df[c] = df[c].fillna(df[c].median())
 
     X_all = df[features].to_numpy(dtype=float)
+
+    print("Number of features:", len(features))
+    print("Example features:", features[:10])
 
     # --- Time-based train/test split (no leakage) ---
     # Use last 20% of dates as test

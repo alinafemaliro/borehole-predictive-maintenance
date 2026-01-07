@@ -10,10 +10,9 @@ def calculate_recall_at_k(y_true, y_score, k_percent: int) -> float:
     ----------
     y_true : array-like
         Binary labels (0/1)
-    y_score : array-like
-        Predicted probabilities/scores
-    k_percent : intspython -c "from src.modeling.model_comparator import ModelComparator; print('OK import ModelComparator')"
-
+    y_score : array-like 
+        Predicted probabilities or scores
+    k_percent : int
         e.g. 10 means top 10%
 
     Returns
